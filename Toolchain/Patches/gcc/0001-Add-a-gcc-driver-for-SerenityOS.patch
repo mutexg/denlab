@@ -1,0 +1,190 @@
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From: Andreas Kling <awesomekling@gmail.com>
+Date: Fri, 5 Apr 2019 03:02:52 +0200
+Subject: [PATCH] Add a gcc driver for DenLabOS
+
+This patch adds support for the `*-*-denlab` target to gcc.
+
+It specifies which flags need to be passed to the linker, defines the
+__denlab__ macro, sets the correct underlying type of `size_t` and
+`ptrdiff_t`, and enables IFUNCs.
+
+Co-Authored-By: Gunnar Beutner <gbeutner@denlabos.org>
+Co-Authored-By: Itamar <itamar8910@gmail.com>
+Co-Authored-By: Daniel Bertalan <dani@danielbertalan.dev>
+Co-Authored-By: Nico Weber <thakis@chromium.org>
+Co-Authored-By: Tim Schumacher <timschumi@gmx.de>
+Co-Authored-By: Andrew Kaster <andrewdkaster@gmail.com>
+Co-Authored-By: Brian Gianforcaro <bgianf@denlabos.org>
+Co-Authored-By: Philip Herron <herron.philip@googlemail.com>
+Co-Authored-By: Shannon Booth <shannon@denlabos.org>
+---
+ gcc/config.gcc               | 23 +++++++++++++++++
+ gcc/config/i386/denlab.h   |  7 +++++
+ gcc/config/denlab.h        | 50 ++++++++++++++++++++++++++++++++++++
+ gcc/config/denlab.opt      | 35 +++++++++++++++++++++++++
+ gcc/config/denlab.opt.urls |  1 +
+ 5 files changed, 116 insertions(+)
+ create mode 100644 gcc/config/i386/denlab.h
+ create mode 100644 gcc/config/denlab.h
+ create mode 100644 gcc/config/denlab.opt
+ create mode 100644 gcc/config/denlab.opt.urls
+
+diff --git a/gcc/config.gcc b/gcc/config.gcc
+index 95c91ee02be4403567d63ac566ab8d3b956a6d74..43e2d9b03a5ce4fc2baf6a2268fdbf77467526f5 100644
+--- a/gcc/config.gcc
++++ b/gcc/config.gcc
+@@ -722,6 +722,18 @@ x86_cpus="generic intel"
+ 
+ # Common parts for widely ported systems.
+ case ${target} in
++*-*-denlab*)
++  gas=yes
++  gnu_ld=yes
++  default_use_cxa_atexit=yes
++  extra_options="${extra_options} denlab.opt"
++  tmake_file="t-slibgcc"
++  case ${target} in
++    aarch64*-* | riscv64-* | x86_64-*)
++      default_gnu_indirect_function=yes
++      ;;
++  esac
++  ;;
+ *-*-darwin*)
+   tmake_file="t-darwin "
+   tm_file="${tm_file} darwin.h"
+@@ -1189,6 +1201,17 @@ case ${target} in
+ esac
+ 
+ case ${target} in
++x86_64-*-denlab*)
++	tm_file="${tm_file} i386/unix.h i386/att.h elfos.h glibc-stdint.h i386/i386elf.h i386/x86-64.h denlab.h i386/denlab.h"
++	;;
++aarch64*-*-denlab*)
++	tm_file="${tm_file} elfos.h glibc-stdint.h aarch64/aarch64-elf.h denlab.h"
++	tmake_file="${tmake_file} aarch64/t-aarch64"
++	;;
++riscv64-*-denlab*)
++	tm_file="${tm_file} elfos.h glibc-stdint.h riscv/elf.h denlab.h"
++	tmake_file="${tmake_file} riscv/t-riscv"
++	;;
+ aarch64*-*-elf | aarch64*-*-fuchsia* | aarch64*-*-rtems*)
+ 	tm_file="${tm_file} elfos.h newlib-stdint.h"
+ 	tm_file="${tm_file} aarch64/aarch64-elf.h aarch64/aarch64-errata.h aarch64/aarch64-elf-raw.h"
+diff --git a/gcc/config/i386/denlab.h b/gcc/config/i386/denlab.h
+new file mode 100644
+index 0000000000000000000000000000000000000000..53a4b8e93b74b4808a4bfed91c4d5558217c584a
+--- /dev/null
++++ b/gcc/config/i386/denlab.h
+@@ -0,0 +1,7 @@
++/* Ensure that we are using the SIZE_TYPE indicated by SysV */
++#undef SIZE_TYPE
++#define SIZE_TYPE    (TARGET_64BIT ? "long unsigned int" : "unsigned int")
++
++/* Ensure that ptrdiff_t matches the actual pointer size */
++#undef PTRDIFF_TYPE
++#define PTRDIFF_TYPE    (TARGET_64BIT ? "long int" : "int")
+diff --git a/gcc/config/denlab.h b/gcc/config/denlab.h
+new file mode 100644
+index 0000000000000000000000000000000000000000..7ee040c395e7bd404aa1f2b112e9248c556fca2a
+--- /dev/null
++++ b/gcc/config/denlab.h
+@@ -0,0 +1,50 @@
++/* Useful if you wish to make target-specific GCC changes. */
++#undef TARGET_DENLAB
++#define TARGET_DENLAB 1
++
++#if defined(HAVE_LD_EH_FRAME_HDR)
++#define LINK_EH_SPEC "%{!static|static-pie:--eh-frame-hdr} "
++#endif
++
++/* Default arguments you want when running your
++   x86_64-denlab-gcc toolchain */
++#undef LIB_SPEC
++#define LIB_SPEC "-lc" /* link against C standard library */
++
++/* Files that are linked before user code.
++   The %s tells GCC to look for these files in the library directory. */
++#undef STARTFILE_SPEC
++#define STARTFILE_SPEC "%{!shared:crt0.o%s} crti.o%s %{shared: %{!fbuilding-libgcc:crt0_shared.o%s}} %{shared|static-pie|!no-pie:crtbeginS.o%s; :crtbegin.o%s}"
++
++/* Files that are linked after user code. */
++#undef ENDFILE_SPEC
++#define ENDFILE_SPEC "%{shared|static-pie|!no-pie:crtendS.o%s; :crtend.o%s} crtn.o%s"
++
++#define TARGET_LIBC_PROVIDES_SSP
++
++#undef LINK_SPEC
++#define LINK_SPEC "%{shared:-shared} %{static:-static} %{!static: %{rdynamic:-export-dynamic} -dynamic-linker /usr/lib/Loader.so}"
++
++#undef CC1_SPEC
++#define CC1_SPEC "-fno-semantic-interposition"
++
++#undef CPP_SPEC
++#define CPP_SPEC "%{posix:-D_POSIX_SOURCE} %{pthread:-D_REENTRANT}"
++
++/* Use --as-needed -lgcc_s for eh support. */
++#define USE_LD_AS_NEEDED 1
++
++/* We don't have a separate math library, it's included within libc. While we do have compatibility
++   linker scripts in place, just don't add it to the linker invocation to begin with. */
++#define MATH_LIBRARY ""
++
++/* Additional predefined macros. */
++#undef TARGET_OS_CPP_BUILTINS
++#define TARGET_OS_CPP_BUILTINS()      \
++  do {                                \
++    builtin_define ("__denlab__");      \
++    builtin_define ("__unix__");      \
++    builtin_assert ("system=denlab");   \
++    builtin_assert ("system=unix");   \
++    builtin_assert ("system=posix");   \
++  } while(0);
+diff --git a/gcc/config/denlab.opt b/gcc/config/denlab.opt
+new file mode 100644
+index 0000000000000000000000000000000000000000..2756a5575480449a2c46b9fdfde541ba2787a263
+--- /dev/null
++++ b/gcc/config/denlab.opt
+@@ -0,0 +1,35 @@
++; DenLabOS options.
++
++; Copyright (C) 2021 Gunnar Beutner <gunnar@beutner.name>
++;
++; This file is part of GCC.
++;
++; GCC is free software; you can redistribute it and/or modify it under
++; the terms of the GNU General Public License as published by the Free
++; Software Foundation; either version 3, or (at your option) any later
++; version.
++;
++; GCC is distributed in the hope that it will be useful, but WITHOUT ANY
++; WARRANTY; without even the implied warranty of MERCHANTABILITY or
++; FITNESS FOR A PARTICULAR PURPOSE.  See the GNU General Public License
++; for more details.
++;
++; You should have received a copy of the GNU General Public License
++; along with GCC; see the file COPYING3.  If not see
++; <http://www.gnu.org/licenses/>.
++
++; See the GCC internals manual (options.texi) for a description of
++; this file's format.
++
++; Please try to keep this file in ASCII collating order.
++
++posix
++Driver
++
++pthread
++Driver
++
++rdynamic
++Driver
++
++; This comment is to ensure we retain the blank line above.
+diff --git a/gcc/config/denlab.opt.urls b/gcc/config/denlab.opt.urls
+new file mode 100644
+index 0000000000000000000000000000000000000000..3166f813b1464cfe71aeaa035ae1e3834f54df75
+--- /dev/null
++++ b/gcc/config/denlab.opt.urls
+@@ -0,0 +1 @@
++; Not sure what to put here but this works

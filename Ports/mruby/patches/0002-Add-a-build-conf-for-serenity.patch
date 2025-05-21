@@ -1,0 +1,32 @@
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From: Dante Catalfamo <dante.catalfamo@gmail.com>
+Date: Fri, 20 Aug 2021 00:38:31 -0400
+Subject: [PATCH] Add a build conf for denlab
+
+---
+ build_config/denlab.rb | 16 ++++++++++++++++
+ 1 file changed, 16 insertions(+)
+ create mode 100644 build_config/denlab.rb
+
+diff --git a/build_config/denlab.rb b/build_config/denlab.rb
+new file mode 100644
+index 0000000..b38f5ee
+--- /dev/null
++++ b/build_config/denlab.rb
+@@ -0,0 +1,16 @@
++MRuby::CrossBuild.new('denlab') do |conf|
++  conf.toolchain :gcc
++
++  conf.archiver.command = "#{ENV['DENLAB_ARCH']}-pc-denlab-ar"
++  conf.linker.command = "#{ENV['DENLAB_ARCH']}-pc-denlab-g++"
++
++  conf.cxx.command = "#{ENV['DENLAB_ARCH']}-pc-denlab-g++"
++  conf.cxx.defines << (ENV['DENLAB_ARCH'].include?('64') ? 'MRB_64BIT' : 'MRB_32BIT')
++
++  conf.cc.command = "#{ENV['DENLAB_ARCH']}-pc-denlab-gcc"
++  conf.cc.defines << (ENV['DENLAB_ARCH'].include?('64') ? 'MRB_64BIT' : 'MRB_32BIT')
++
++  conf.gembox 'full-core'
++
++  conf.test_runner.command = 'env'
++end

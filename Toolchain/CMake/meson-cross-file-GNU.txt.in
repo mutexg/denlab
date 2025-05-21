@@ -1,0 +1,16 @@
+[binaries]
+c = '@DENLAB_ARCH@-pc-denlab-gcc'
+cpp = '@DENLAB_ARCH@-pc-denlab-g++'
+ar = '@DENLAB_ARCH@-pc-denlab-ar'
+ranlib = '@DENLAB_ARCH@-pc-denlab-ranlib'
+pkgconfig = 'pkg-config'
+
+[properties]
+sys_root = '@DENLAB_BUILD_DIR@/Root'
+needs_exe_wrapper = true
+
+[host_machine]
+system = 'denlab'
+cpu_family = '@DENLAB_ARCH@'
+cpu = '@DENLAB_ARCH@'
+endian = 'little'

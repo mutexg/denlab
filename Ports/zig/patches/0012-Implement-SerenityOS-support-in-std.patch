@@ -1,0 +1,973 @@
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From: sin-ack <sin-ack@users.noreply.github.com>
+Date: Sun, 30 Oct 2022 19:30:50 +0000
+Subject: [PATCH] Implement DenLabOS support in std
+
+---
+ zig/lib/std/Thread.zig               |   2 +-
+ zig/lib/std/c.zig                    |   1 +
+ zig/lib/std/c/denlab.zig           | 709 +++++++++++++++++++++++++++
+ zig/lib/std/c/denlab/constants.zig |   6 +
+ zig/lib/std/debug.zig                |   5 +-
+ zig/lib/std/fs.zig                   |  79 ++-
+ zig/lib/std/fs/get_app_data_dir.zig  |   2 +-
+ zig/lib/std/os.zig                   |   4 +-
+ zig/lib/std/target.zig               |   1 +
+ 9 files changed, 801 insertions(+), 8 deletions(-)
+ create mode 100644 zig/lib/std/c/denlab.zig
+ create mode 100644 zig/lib/std/c/denlab/constants.zig
+
+diff --git a/zig/lib/std/Thread.zig b/zig/lib/std/Thread.zig
+index 74f8e98df4bf212830933c150d6d7f0242007bda..fe8fc416fcb0c1ec4ec414c9f01e4d6639c1d87b 100644
+--- a/zig/lib/std/Thread.zig
++++ b/zig/lib/std/Thread.zig
+@@ -636,7 +636,7 @@ const PosixThreadImpl = struct {
+                 };
+                 return @as(usize, @intCast(count));
+             },
+-            .solaris => {
++            .solaris, .denlab => {
+                 // The "proper" way to get the cpu count would be to query
+                 // /dev/kstat via ioctls, and traverse a linked list for each
+                 // cpu.
+diff --git a/zig/lib/std/c.zig b/zig/lib/std/c.zig
+index 66875eadd0347c930632254901d37f1b4f4fabcc..c78c8aa3d0daa67279a17c359870ac3052e43bb9 100644
+--- a/zig/lib/std/c.zig
++++ b/zig/lib/std/c.zig
+@@ -54,6 +54,7 @@ pub usingnamespace switch (builtin.os.tag) {
+     .minix => @import("c/minix.zig"),
+     .emscripten => @import("c/emscripten.zig"),
+     .wasi => @import("c/wasi.zig"),
++    .denlab => @import("c/denlab.zig"),
+     else => struct {},
+ };
+ 
+diff --git a/zig/lib/std/c/denlab.zig b/zig/lib/std/c/denlab.zig
+new file mode 100644
+index 0000000000000000000000000000000000000000..d85d44ee1f0c71706f6c17f15183ece261a42e28
+--- /dev/null
++++ b/zig/lib/std/c/denlab.zig
+@@ -0,0 +1,709 @@
++const builtin = @import("builtin");
++pub const std = @import("std");
++pub const DenLabConstants = @import("denlab/constants.zig");
++
++const native_arch = builtin.cpu.arch;
++
++pub const fd_t = c_int;
++pub const dev_t = u64;
++pub const ino_t = u64;
++pub const off_t = i64;
++pub const nlink_t = u64;
++
++// see Kernel/API/POSIX/sys/socket.h
++pub const sa_family_t = u16;
++
++// see Kernel/API/POSIX/sys/types.h
++pub const socklen_t = u32;
++
++// see Userland/Libraries/LibC/netdb.h
++pub const addrinfo = struct {
++    flags: u16,
++    family: sa_family_t,
++    socktype: u16,
++    protocol: u16,
++    addrlen: socklen_t,
++    addr: ?*sockaddr,
++    canonname: ?[*:0]const u8,
++    next: ?*addrinfo,
++};
++
++// see Kernel/API/POSIX/sys/socket.h
++pub const AF = struct {
++    pub const MASK = 0xff;
++    pub const UNSPEC = 0;
++    pub const LOCAL = 1;
++    pub const UNIX = LOCAL;
++    pub const INET = 2;
++    pub const INET6 = 3;
++    pub const MAX = 4;
++};
++
++// see Userland/Libraries/LibC/netdb.h
++pub const AI = struct {
++    pub const PASSIVE = 1;
++    pub const CANONNAME = 2;
++    pub const NUMERICHOST = 4;
++    pub const NUMERICSERV = 8;
++    pub const V4MAPPED = 16;
++    pub const ALL = 32;
++    pub const ADDRCONFIG = 64;
++};
++
++pub const E = enum(i32) {
++    SUCCESS = DenLabConstants.ESUCCESS,
++    PERM = DenLabConstants.EPERM,
++    NOENT = DenLabConstants.ENOENT,
++    SRCH = DenLabConstants.ESRCH,
++    INTR = DenLabConstants.EINTR,
++    IO = DenLabConstants.EIO,
++    NXIO = DenLabConstants.ENXIO,
++    @"2BIG" = DenLabConstants.E2BIG,
++    NOEXEC = DenLabConstants.ENOEXEC,
++    BADF = DenLabConstants.EBADF,
++    CHILD = DenLabConstants.ECHILD,
++    AGAIN = DenLabConstants.EAGAIN,
++    NOMEM = DenLabConstants.ENOMEM,
++    ACCES = DenLabConstants.EACCES,
++    FAULT = DenLabConstants.EFAULT,
++    NOTBLK = DenLabConstants.ENOTBLK,
++    BUSY = DenLabConstants.EBUSY,
++    EXIST = DenLabConstants.EEXIST,
++    XDEV = DenLabConstants.EXDEV,
++    NODEV = DenLabConstants.ENODEV,
++    NOTDIR = DenLabConstants.ENOTDIR,
++    ISDIR = DenLabConstants.EISDIR,
++    INVAL = DenLabConstants.EINVAL,
++    NFILE = DenLabConstants.ENFILE,
++    MFILE = DenLabConstants.EMFILE,
++    NOTTY = DenLabConstants.ENOTTY,
++    TXTBSY = DenLabConstants.ETXTBSY,
++    FBIG = DenLabConstants.EFBIG,
++    NOSPC = DenLabConstants.ENOSPC,
++    SPIPE = DenLabConstants.ESPIPE,
++    ROFS = DenLabConstants.EROFS,
++    MLINK = DenLabConstants.EMLINK,
++    PIPE = DenLabConstants.EPIPE,
++    RANGE = DenLabConstants.ERANGE,
++    NAMETOOLONG = DenLabConstants.ENAMETOOLONG,
++    LOOP = DenLabConstants.ELOOP,
++    OVERFLOW = DenLabConstants.EOVERFLOW,
++    OPNOTSUPP = DenLabConstants.EOPNOTSUPP,
++    NOSYS = DenLabConstants.ENOSYS,
++    NOTIMPL = DenLabConstants.ENOTIMPL,
++    AFNOSUPPORT = DenLabConstants.EAFNOSUPPORT,
++    NOTSOCK = DenLabConstants.ENOTSOCK,
++    ADDRINUSE = DenLabConstants.EADDRINUSE,
++    NOTEMPTY = DenLabConstants.ENOTEMPTY,
++    DOM = DenLabConstants.EDOM,
++    CONNREFUSED = DenLabConstants.ECONNREFUSED,
++    HOSTDOWN = DenLabConstants.EHOSTDOWN,
++    ADDRNOTAVAIL = DenLabConstants.EADDRNOTAVAIL,
++    ISCONN = DenLabConstants.EISCONN,
++    CONNABORTED = DenLabConstants.ECONNABORTED,
++    ALREADY = DenLabConstants.EALREADY,
++    CONNRESET = DenLabConstants.ECONNRESET,
++    DESTADDRREQ = DenLabConstants.EDESTADDRREQ,
++    HOSTUNREACH = DenLabConstants.EHOSTUNREACH,
++    ILSEQ = DenLabConstants.EILSEQ,
++    MSGSIZE = DenLabConstants.EMSGSIZE,
++    NETDOWN = DenLabConstants.ENETDOWN,
++    NETUNREACH = DenLabConstants.ENETUNREACH,
++    NETRESET = DenLabConstants.ENETRESET,
++    NOBUFS = DenLabConstants.ENOBUFS,
++    NOLCK = DenLabConstants.ENOLCK,
++    NOMSG = DenLabConstants.ENOMSG,
++    NOPROTOOPT = DenLabConstants.ENOPROTOOPT,
++    NOTCONN = DenLabConstants.ENOTCONN,
++    SHUTDOWN = DenLabConstants.ESHUTDOWN,
++    TOOMANYREFS = DenLabConstants.ETOOMANYREFS,
++    SOCKTNOSUPPORT = DenLabConstants.ESOCKTNOSUPPORT,
++    PROTONOSUPPORT = DenLabConstants.EPROTONOSUPPORT,
++    DEADLK = DenLabConstants.EDEADLK,
++    TIMEDOUT = DenLabConstants.ETIMEDOUT,
++    PROTOTYPE = DenLabConstants.EPROTOTYPE,
++    INPROGRESS = DenLabConstants.EINPROGRESS,
++    NOTHREAD = DenLabConstants.ENOTHREAD,
++    PROTO = DenLabConstants.EPROTO,
++    NOTSUP = DenLabConstants.ENOTSUP,
++    PFNOSUPPORT = DenLabConstants.EPFNOSUPPORT,
++    DIRINTOSELF = DenLabConstants.EDIRINTOSELF,
++    DQUOT = DenLabConstants.EDQUOT,
++    NOTRECOVERABLE = DenLabConstants.ENOTRECOVERABLE,
++    CANCELED = DenLabConstants.ECANCELED,
++    PROMISEVIOLATION = DenLabConstants.EPROMISEVIOLATION,
++    STALE = DenLabConstants.ESTALE,
++};
++
++// see Userland/Libraries/LibC/netdb.h
++pub const EAI = enum(c_int) {
++    ADDRFAMILY = 1,
++    AGAIN = 2,
++    BADFLAGS = 3,
++    FAIL = 4,
++    FAMILY = 5,
++    MEMORY = 6,
++    NODATA = 7,
++    NONAME = 8,
++    SERVICE = 9,
++    SOCKTYPE = 10,
++    SYSTEM = 11,
++    OVERFLOW = 12,
++    _,
++};
++
++// see Kernel/API/POSIX/sys/limits.h
++pub const HOST_NAME_MAX = DenLabConstants.HOST_NAME_MAX;
++pub const NAME_MAX = DenLabConstants.NAME_MAX;
++pub const PATH_MAX = DenLabConstants.PATH_MAX;
++
++pub const time_t = i64;
++pub const timespec = extern struct {
++    tv_sec: time_t,
++    tv_nsec: c_long,
++};
++
++pub const mode_t = u16;
++
++pub const AT = struct {
++    pub const FDCWD = DenLabConstants.AT_FDCWD;
++    pub const SYMLINK_NOFOLLOW = DenLabConstants.AT_SYMLINK_NOFOLLOW;
++    pub const REMOVEDIR = DenLabConstants.AT_REMOVEDIR;
++};
++
++pub const _errno = struct {
++    extern "c" fn __errno_location() *c_int;
++}.__errno_location;
++
++pub const pthread_attr_t = *anyopaque;
++
++pub const LOCK = struct {
++    pub const SH = DenLabConstants.LOCK_SH;
++    pub const EX = DenLabConstants.LOCK_EX;
++    pub const UN = DenLabConstants.LOCK_UN;
++    pub const NB = DenLabConstants.LOCK_NB;
++};
++
++pub const STDIN_FILENO = DenLabConstants.STDIN_FILENO;
++pub const STDOUT_FILENO = DenLabConstants.STDOUT_FILENO;
++pub const STDERR_FILENO = DenLabConstants.STDERR_FILENO;
++
++pub const F = struct {
++    pub const DUPFD = DenLabConstants.F_DUPFD;
++    pub const GETFD = DenLabConstants.F_GETFD;
++    pub const SETFD = DenLabConstants.F_SETFD;
++    pub const GETFL = DenLabConstants.F_GETFL;
++    pub const SETFL = DenLabConstants.F_SETFL;
++    pub const ISTTY = DenLabConstants.F_ISTTY;
++    pub const GETLK = DenLabConstants.F_GETLK;
++    pub const SETLK = DenLabConstants.F_SETLK;
++    pub const SETLKW = DenLabConstants.F_SETLKW;
++};
++
++pub const FD_CLOEXEC = DenLabConstants.FD_CLOEXEC;
++
++pub const O = struct {
++    pub const RDONLY = DenLabConstants.O_RDONLY;
++    pub const WRONLY = DenLabConstants.O_WRONLY;
++    pub const RDWR = DenLabConstants.O_RDWR;
++    pub const ACCMODE = DenLabConstants.O_ACCMODE;
++    pub const EXEC = DenLabConstants.O_EXEC;
++    pub const CREAT = DenLabConstants.O_CREAT;
++    pub const EXCL = DenLabConstants.O_EXCL;
++    pub const NOCTTY = DenLabConstants.O_NOCTTY;
++    pub const TRUNC = DenLabConstants.O_TRUNC;
++    pub const APPEND = DenLabConstants.O_APPEND;
++    pub const NONBLOCK = DenLabConstants.O_NONBLOCK;
++    pub const DIRECTORY = DenLabConstants.O_DIRECTORY;
++    pub const NOFOLLOW = DenLabConstants.O_NOFOLLOW;
++    pub const CLOEXEC = DenLabConstants.O_CLOEXEC;
++    pub const DIRECT = DenLabConstants.O_DIRECT;
++    pub const SYNC = DenLabConstants.O_SYNC;
++};
++
++pub const R_OK = DenLabConstants.R_OK;
++pub const W_OK = DenLabConstants.W_OK;
++pub const X_OK = DenLabConstants.X_OK;
++pub const F_OK = DenLabConstants.F_OK;
++
++pub const CLOCK = struct {
++    pub const REALTIME = DenLabConstants.CLOCK_REALTIME;
++    pub const MONOTONIC = DenLabConstants.CLOCK_MONOTONIC;
++    pub const MONOTONIC_RAW = DenLabConstants.CLOCK_MONOTONIC_RAW;
++    pub const REALTIME_COARSE = DenLabConstants.CLOCK_REALTIME_COARSE;
++    pub const MONOTONIC_COARSE = DenLabConstants.CLOCK_MONOTONIC_COARSE;
++};
++
++pub const IOV_MAX = DenLabConstants.IOV_MAX;
++
++// see Kernel/API/POSIX/sys/socket.h
++pub const IPPROTO = struct {
++    pub const IP = 0;
++    pub const ICMP = 1;
++    pub const IGMP = 2;
++    pub const IPIP = 4;
++    pub const TCP = 6;
++    pub const UDP = 17;
++    pub const IPV6 = 41;
++    pub const ESP = 50;
++    pub const AH = 51;
++    pub const ICMPV6 = 58;
++    pub const RAW = 255;
++};
++
++// see Kernel/API/POSIX/types.h
++pub const pthread_mutex_t = extern struct {
++    lock: u32 = 0,
++    owner: ?std.c.pthread_t = null,
++    level: c_int = 0,
++    type: c_int = 0, // __PTHREAD_MUTEX_NORMAL
++};
++
++pub const pthread_cond_t = extern struct {
++    mutex: ?*pthread_mutex_t = null,
++    value: u32 = 0,
++    clockid: c_int = CLOCK.MONOTONIC_COARSE, // clockid_t
++};
++
++pub const pthread_rwlock_t = extern struct {
++    ptr: u64 = 0
++};
++
++pub const PTHREAD_STACK_MIN = DenLabConstants.PTHREAD_STACK_MIN;
++
++pub const uid_t = u32;
++pub const gid_t = u32;
++
++pub const blksize_t = u64;
++pub const blkcnt_t = u64;
++
++pub const Stat = extern struct {
++    dev: dev_t,
++    ino: ino_t,
++    mode: mode_t,
++    nlink: nlink_t,
++    uid: uid_t,
++    gid: gid_t,
++    rdev: dev_t,
++    size: off_t,
++    blksize: blksize_t,
++    blocks: blkcnt_t,
++    atim: timespec,
++    mtim: timespec,
++    ctim: timespec,
++
++    pub fn atime(self: @This()) timespec {
++        return self.atim;
++    }
++    pub fn mtime(self: @This()) timespec {
++        return self.mtim;
++    }
++    pub fn ctime(self: @This()) timespec {
++        return self.ctim;
++    }
++};
++
++pub const pid_t = c_int;
++
++pub const S = struct {
++    pub const IFMT = DenLabConstants.S_IFMT;
++    pub const IFDIR = DenLabConstants.S_IFDIR;
++    pub const IFCHR = DenLabConstants.S_IFCHR;
++    pub const IFBLK = DenLabConstants.S_IFBLK;
++    pub const IFREG = DenLabConstants.S_IFREG;
++    pub const IFIFO = DenLabConstants.S_IFIFO;
++    pub const IFLNK = DenLabConstants.S_IFLNK;
++    pub const IFSOCK = DenLabConstants.S_IFSOCK;
++
++    pub const ISUID = DenLabConstants.S_ISUID;
++    pub const ISGID = DenLabConstants.S_ISGID;
++    pub const ISVTX = DenLabConstants.S_ISVTX;
++    pub const IRUSR = DenLabConstants.S_IRUSR;
++    pub const IWUSR = DenLabConstants.S_IWUSR;
++    pub const IXUSR = DenLabConstants.S_IXUSR;
++    pub const IREAD = DenLabConstants.S_IREAD;
++    pub const IWRITE = DenLabConstants.S_IWRITE;
++    pub const IEXEC = DenLabConstants.S_IEXEC;
++    pub const IRGRP = DenLabConstants.S_IRGRP;
++    pub const IWGRP = DenLabConstants.S_IWGRP;
++    pub const IXGRP = DenLabConstants.S_IXGRP;
++    pub const IROTH = DenLabConstants.S_IROTH;
++    pub const IWOTH = DenLabConstants.S_IWOTH;
++    pub const IXOTH = DenLabConstants.S_IXOTH;
++
++    pub const IRWXU = DenLabConstants.S_IRWXU;
++
++    pub const IRWXG = DenLabConstants.S_IRWXG;
++    pub const IRWXO = DenLabConstants.S_IRWXO;
++
++    pub fn ISREG(m: u32) bool {
++        return m & IFMT == IFREG;
++    }
++
++    pub fn ISLNK(m: u32) bool {
++        return m & IFMT == IFLNK;
++    }
++
++    pub fn ISBLK(m: u32) bool {
++        return m & IFMT == IFBLK;
++    }
++
++    pub fn ISDIR(m: u32) bool {
++        return m & IFMT == IFDIR;
++    }
++
++    pub fn ISCHR(m: u32) bool {
++        return m & IFMT == IFCHR;
++    }
++
++    pub fn ISFIFO(m: u32) bool {
++        return m & IFMT == IFIFO;
++    }
++
++    pub fn ISSOCK(m: u32) bool {
++        return m & IFMT == IFSOCK;
++    }
++};
++
++pub const SEEK = struct {
++    pub const SET = DenLabConstants.SEEK_SET;
++    pub const CUR = DenLabConstants.SEEK_CUR;
++    pub const END = DenLabConstants.SEEK_END;
++};
++
++// see Kernel/API/POSIX/signal_numbers.h
++pub const SIG = struct {
++    pub const ABRT = DenLabConstants.SIGABRT;
++    pub const ALRM = DenLabConstants.SIGALRM;
++    pub const BUS = DenLabConstants.SIGBUS;
++    pub const CANCEL = DenLabConstants.SIGCANCEL;
++    pub const CHLD = DenLabConstants.SIGCHLD;
++    pub const CONT = DenLabConstants.SIGCONT;
++    pub const FPE = DenLabConstants.SIGFPE;
++    pub const HUP = DenLabConstants.SIGHUP;
++    pub const ILL = DenLabConstants.SIGILL;
++    pub const INFO = DenLabConstants.SIGINFO;
++    pub const INT = DenLabConstants.SIGINT;
++    pub const INVAL = DenLabConstants.SIGINVAL;
++    pub const IO = DenLabConstants.SIGIO;
++    pub const KILL = DenLabConstants.SIGKILL;
++    pub const PIPE = DenLabConstants.SIGPIPE;
++    pub const PROF = DenLabConstants.SIGPROF;
++    pub const QUIT = DenLabConstants.SIGQUIT;
++    pub const SEGV = DenLabConstants.SIGSEGV;
++    pub const STKFLT = DenLabConstants.SIGSTKFLT;
++    pub const STOP = DenLabConstants.SIGSTOP;
++    pub const SYS = DenLabConstants.SIGSYS;
++    pub const TERM = DenLabConstants.SIGTERM;
++    pub const TRAP = DenLabConstants.SIGTRAP;
++    pub const TSTP = DenLabConstants.SIGTSTP;
++    pub const TTIN = DenLabConstants.SIGTTIN;
++    pub const TTOU = DenLabConstants.SIGTTOU;
++    pub const URG = DenLabConstants.SIGURG;
++    pub const USR1 = DenLabConstants.SIGUSR1;
++    pub const USR2 = DenLabConstants.SIGUSR2;
++    pub const VTALRM = DenLabConstants.SIGVTALRM;
++    pub const WINCH = DenLabConstants.SIGWINCH;
++    pub const XCPU = DenLabConstants.SIGXCPU;
++    pub const XFSZ = DenLabConstants.SIGXFSZ;
++
++    // see Kernel/API/POSIX/signal.h
++    pub const ERR = @as(?Sigaction.handler_fn, @ptrFromInt(-1));
++    pub const DFL = @as(?Sigaction.handler_fn, @ptrFromInt(0));
++    pub const IGN = @as(?Sigaction.handler_fn, @ptrFromInt(1));
++};
++
++pub const sigval = extern union {
++    int: i32,
++    ptr: *anyopaque,
++};
++
++pub const siginfo_t = extern struct {
++    signo: c_int,
++    code: c_int,
++    errno: c_int,
++    pid: pid_t,
++    uid: uid_t,
++    addr: ?*const anyopaque,
++    status: c_int,
++    band: c_int,
++    value: sigval,
++};
++
++pub const sigset_t = u32;
++pub const empty_sigset: sigset_t = 0;
++
++pub const Sigaction = extern struct {
++    pub const handler_fn = *const fn (c_int) align(1) callconv(.C) void;
++    pub const sigaction_fn = *const fn (c_int, *const siginfo_t, ?*const anyopaque) callconv(.C) void;
++
++    handler: extern union {
++        handler: ?handler_fn,
++        sigaction: ?sigaction_fn,
++    },
++    mask: sigset_t,
++    flags: c_uint,
++};
++
++pub const SO = struct {
++    pub const ACCEPTCONN = DenLabConstants.SO_ACCEPTCONN;
++    pub const BINDTODEVICE = DenLabConstants.SO_BINDTODEVICE;
++    pub const BROADCAST = DenLabConstants.SO_BROADCAST;
++    pub const DEBUG = DenLabConstants.SO_DEBUG;
++    pub const DONTROUTE = DenLabConstants.SO_DONTROUTE;
++    pub const ERROR = DenLabConstants.SO_ERROR;
++    pub const KEEPALIVE = DenLabConstants.SO_KEEPALIVE;
++    pub const LINGER = DenLabConstants.SO_LINGER;
++    pub const OOBINLINE = DenLabConstants.SO_OOBINLINE;
++    pub const PEERCRED = DenLabConstants.SO_PEERCRED;
++    pub const RCVBUF = DenLabConstants.SO_RCVBUF;
++    pub const RCVLOWAT = DenLabConstants.SO_RCVLOWAT;
++    pub const RCVTIMEO = DenLabConstants.SO_RCVTIMEO;
++    pub const REUSEADDR = DenLabConstants.SO_REUSEADDR;
++    pub const SNDBUF = DenLabConstants.SO_SNDBUF;
++    pub const SNDLOWAT = DenLabConstants.SO_SNDLOWAT;
++    pub const SNDTIMEO = DenLabConstants.SO_SNDTIMEO;
++    pub const TIMESTAMP = DenLabConstants.SO_TIMESTAMP;
++    pub const TYPE = DenLabConstants.SO_TYPE;
++};
++
++pub const SOL = struct {
++    pub const SOCKET = DenLabConstants.SOL_SOCKET;
++};
++
++// see Kernel/API/POSIX/netinet/in.h
++pub const in_port_t = u16;
++
++pub const in_addr = u32;
++pub const in6_addr = [16]u8;
++
++// see Kernel/API/POSIX/sys/socket.h
++pub const sockaddr = extern struct {
++    /// address family
++    family: sa_family_t,
++    /// actually longer; address value
++    data: [14]u8,
++
++    // see Kernel/API/POSIX/netinet/in.h
++    pub const in = extern struct {
++        family: sa_family_t = AF.INET,
++        port: in_port_t,
++        addr: in_addr,
++        zero: [8]u8 = [8]u8{ 0, 0, 0, 0, 0, 0, 0, 0 },
++    };
++
++    pub const in6 = extern struct {
++        family: sa_family_t = AF.INET6,
++        port: in_port_t,
++        flowinfo: u32,
++        addr: in6_addr,
++        scope_id: u32,
++    };
++
++    // see Kernel/API/POSIX/sys/un.h
++    /// Definitions for UNIX IPC domain.
++    pub const un = extern struct {
++        family: sa_family_t = AF.LOCAL,
++
++        /// path name
++        path: [106]u8,
++    };
++};
++
++pub const POLL = struct {
++    pub const IN = DenLabConstants.POLLIN;
++    pub const RDNORM = DenLabConstants.POLLRDNORM;
++    pub const PRI = DenLabConstants.POLLPRI;
++    pub const OUT = DenLabConstants.POLLOUT;
++    pub const WRNORM = DenLabConstants.POLLWRNORM;
++    pub const ERR = DenLabConstants.POLLERR;
++    pub const HUP = DenLabConstants.POLLHUP;
++    pub const NVAL = DenLabConstants.POLLNVAL;
++    pub const WRBAND = DenLabConstants.POLLWRBAND;
++    pub const RDHUP = DenLabConstants.POLLRDHUP;
++};
++
++// see Kernel/API/POSIX/signal.h
++pub const SA = struct {
++    pub const NOCLDSTOP = DenLabConstants.SA_NOCLDSTOP;
++    pub const NOCLDWAIT = DenLabConstants.SA_NOCLDWAIT;
++    pub const SIGINFO = DenLabConstants.SA_SIGINFO;
++    pub const RESTART = DenLabConstants.SA_RESTART;
++    pub const RESETHAND = DenLabConstants.SA_RESETHAND;
++    pub const ONSTACK = DenLabConstants.SA_ONSTACK;
++    pub const NODEFER = DenLabConstants.SA_NODEFER;
++
++    // see Toolchain/Tarballs/gcc-13.1.0/libsanitizer/sanitizer_common/sanitizer_linux.cpp
++    pub const RESTORER = 0x04000000;
++};
++
++//see Kernel/API/POSIX/sys/socket.h
++pub const SHUT = struct {
++    pub const RD = DenLabConstants.SHUT_RD;
++    pub const WR = DenLabConstants.SHUT_WR;
++    pub const RDWR = DenLabConstants.SHUT_RDWR;
++};
++
++pub const SOCK = struct {
++    pub const TYPE_MASK = 0xff;
++    pub const STREAM = 1;
++    pub const DGRAM = 2;
++    pub const RAW = 3;
++    pub const RDM = 4;
++    pub const SEQPACKET = 5;
++    pub const NONBLOCK = 2048;
++    pub const CLOEXEC = 524288;
++};
++
++pub const pollfd = struct {
++    fd: c_int,
++    events: c_short,
++    revents: c_short,
++};
++
++pub const nfds_t = c_uint;
++
++// see Userland/Libraries/LibC/signal.h
++pub extern "c" fn sigaltstack(ss: ?*stack_t, old_ss: ?*stack_t) c_int;
++
++// see Kernel/API/POSIX/signal.h
++pub const stack_t = struct {
++    sp: *anyopaque,
++    flags: c_int,
++    size: usize
++};
++
++pub const mcontext_t = switch (native_arch) {
++    .x86_64 =>
++        // see Kernel/Arch/x86_64/mcontext.h
++        struct {
++            rax: u64,
++            rcx: u64,
++            rdx: u64,
++            rbx: u64,
++            rsp: u64,
++            rbp: u64,
++            rsi: u64,
++            rdi: u64,
++            rip: u64,
++            r8: u64,
++            r9: u64,
++            r10: u64,
++            r11: u64,
++            r12: u64,
++            r13: u64,
++            r14: u64,
++            r15: u64,
++            rflags: u64,
++            cs: u32,
++            ss: u32,
++            ds: u32,
++            es: u32,
++            fs: u32,
++            gs: u32
++        },
++    .aarch64 =>
++        // see Kernel/Arch/aarch64/mcontext.h
++        struct {
++            x: [31]u64,
++            sp: u64,
++            pc: u64
++        },
++    else => @compileError("Arch {native_arch} not implemented for denlab")
++};
++
++// see Kernel/API/POSIX/ucontext.h
++pub const ucontext_t = struct {
++    uc_link: *ucontext_t,
++    uc_sigmask: sigset_t,
++    uc_stack: stack_t,
++    uc_mcontext: mcontext_t
++};
++
++pub const W = struct {
++    pub const NOHANG = DenLabConstants.WNOHANG;
++    pub const UNTRACED = DenLabConstants.WUNTRACED;
++    pub const STOPPED = DenLabConstants.WSTOPPED;
++    pub const EXITED = DenLabConstants.WEXITED;
++    pub const CONTINUED = DenLabConstants.WCONTINUED;
++    pub const NOWAIT = DenLabConstants.WNOWAIT;
++
++    pub fn EXITSTATUS(s: u32) u8 {
++        return @intCast((s & 0xff00) >> 8);
++    }
++
++    pub fn STOPSIG(s: u32) u32 {
++        return EXITSTATUS(s);
++    }
++
++    pub fn TERMSIG(s: u32) u32 {
++        return s & 0x7f;
++    }
++
++    pub fn IFEXITED(s: u32) bool {
++        return TERMSIG(s) == 0;
++    }
++
++    pub fn IFSTOPPED(s: u32) bool {
++        return (s & 0xff) == 0x7f;
++    }
++
++    pub fn IFSIGNALED(s: u32) bool {
++        return (@as(u8, @intCast((s & 0x7f) + 1)) >> 1) > 0;
++    }
++
++    pub fn IFCONTINUED(s: u32) bool {
++        return s == 0xffff;
++    }
++};
++
++pub const dirent = extern struct {
++    d_ino: ino_t,
++    d_off: off_t,
++    d_reclen: c_ushort,
++    d_type: u8,
++    d_name: [256]u8,
++};
++pub extern "c" fn readdir_r(dir: *std.c.DIR, entry: *dirent, result: *?*dirent) i32;
++
++pub const PROT = struct {
++    pub const READ = DenLabConstants.PROT_READ;
++    pub const WRITE = DenLabConstants.PROT_WRITE;
++    pub const EXEC = DenLabConstants.PROT_EXEC;
++    pub const NONE = DenLabConstants.PROT_NONE;
++};
++
++pub const MAP = struct {
++    pub const FILE = DenLabConstants.MAP_FILE;
++    pub const SHARED = DenLabConstants.MAP_SHARED;
++    pub const PRIVATE = DenLabConstants.MAP_PRIVATE;
++    pub const FIXED = DenLabConstants.MAP_FIXED;
++    pub const ANONYMOUS = DenLabConstants.MAP_ANONYMOUS;
++    pub const ANON = DenLabConstants.MAP_ANON;
++    pub const STACK = DenLabConstants.MAP_STACK;
++    pub const NORESERVE = DenLabConstants.MAP_NORESERVE;
++    pub const RANDOMIZED = DenLabConstants.MAP_RANDOMIZED;
++    pub const PURGEABLE = DenLabConstants.MAP_PURGEABLE;
++    pub const FIXED_NOREPLACE = DenLabConstants.MAP_FIXED_NOREPLACE;
++    pub const FAILED: *anyopaque = @ptrFromInt(@as(usize, @bitCast(@as(isize, -1))));
++};
++
++pub const MSF = struct {
++    pub const SYNC = DenLabConstants.MS_SYNC;
++    pub const ASYNC = DenLabConstants.MS_ASYNC;
++    pub const INVALIDATE = DenLabConstants.MS_INVALIDATE;
++};
++
++pub extern "c" fn sysconf(sc: c_int) c_long;
++pub const _SC = struct {
++    pub const NPROCESSORS_ONLN = DenLabConstants._SC_NPROCESSORS_ONLN;
++};
++
++pub const dl_phdr_info = extern struct {
++    dlpi_addr: std.elf.Addr,
++    dlpi_name: ?[*:0]const u8,
++    dlpi_phdr: [*]std.elf.Phdr,
++    dlpi_phnum: std.elf.Half,
++};
++pub const dl_iterate_phdr_callback = *const fn (info: *dl_phdr_info, size: usize, data: ?*anyopaque) callconv(.C) c_int;
++pub extern "c" fn dl_iterate_phdr(callback: dl_iterate_phdr_callback, data: ?*anyopaque) c_int;
+diff --git a/zig/lib/std/c/denlab/constants.zig b/zig/lib/std/c/denlab/constants.zig
+new file mode 100644
+index 0000000000000000000000000000000000000000..94d7b1c091f7affb5c968738a8719cbbe526650b
+--- /dev/null
++++ b/zig/lib/std/c/denlab/constants.zig
+@@ -0,0 +1,6 @@
++comptime {
++    @compileError(
++        "A Zig compilation targeting DenLabOS can only be done by installing the DenLabOS Zig port. " ++
++            "This file is replaced by the actual POSIX constants during the port build process.",
++    );
++}
+diff --git a/zig/lib/std/debug.zig b/zig/lib/std/debug.zig
+index 6de21ddd1be833db60a8460cfe15ca6cd36fb90a..ff8465975624ec09453f62824ee5d75bc8d0be4a 100644
+--- a/zig/lib/std/debug.zig
++++ b/zig/lib/std/debug.zig
+@@ -167,7 +167,7 @@ pub fn relocateContext(context: *ThreadContext) void {
+     };
+ }
+ 
+-pub const have_getcontext = @hasDecl(os.system, "getcontext") and
++pub const have_getcontext = @hasDecl(os.system, "getcontext") and builtin.os.tag != .denlab and
+     builtin.os.tag != .openbsd and
+     (builtin.os.tag != .linux or switch (builtin.cpu.arch) {
+     .x86,
+@@ -984,6 +984,7 @@ pub fn openSelfDebugInfo(allocator: mem.Allocator) OpenSelfDebugInfoError!DebugI
+             .dragonfly,
+             .openbsd,
+             .macos,
++            .denlab,
+             .solaris,
+             .windows,
+             => return try DebugInfo.init(allocator),
+@@ -2223,7 +2224,7 @@ pub const ModuleDebugInfo = switch (native_os) {
+             };
+         }
+     },
+-    .linux, .netbsd, .freebsd, .dragonfly, .openbsd, .haiku, .solaris => struct {
++    .linux, .netbsd, .freebsd, .dragonfly, .openbsd, .haiku, .solaris, .denlab => struct {
+         base_address: usize,
+         dwarf: DW.DwarfInfo,
+         mapped_memory: []align(mem.page_size) const u8,
+diff --git a/zig/lib/std/fs.zig b/zig/lib/std/fs.zig
+index f01bcb4f22c86a7a237fb43fa219ba6071c646d3..8beea7604a3965e322706e329476609a8ff198ac 100644
+--- a/zig/lib/std/fs.zig
++++ b/zig/lib/std/fs.zig
+@@ -39,7 +39,7 @@ pub const Watch = @import("fs/watch.zig").Watch;
+ /// fit into a UTF-8 encoded array of this length.
+ /// The byte count includes room for a null sentinel byte.
+ pub const MAX_PATH_BYTES = switch (builtin.os.tag) {
+-    .linux, .macos, .ios, .freebsd, .openbsd, .netbsd, .dragonfly, .haiku, .solaris, .plan9 => os.PATH_MAX,
++    .linux, .macos, .ios, .freebsd, .openbsd, .netbsd, .dragonfly, .haiku, .solaris, .plan9, .denlab => os.PATH_MAX,
+     // Each UTF-16LE character may be expanded to 3 UTF-8 bytes.
+     // If it would require 4 UTF-8 bytes, then there would be a surrogate
+     // pair in the UTF-16LE, and we (over)account 3 bytes for it that way.
+@@ -59,7 +59,7 @@ pub const MAX_PATH_BYTES = switch (builtin.os.tag) {
+ /// (depending on the platform) this assumption may not hold for every configuration.
+ /// The byte count does not include a null sentinel byte.
+ pub const MAX_NAME_BYTES = switch (builtin.os.tag) {
+-    .linux, .macos, .ios, .freebsd, .openbsd, .netbsd, .dragonfly => os.NAME_MAX,
++    .linux, .macos, .ios, .freebsd, .openbsd, .netbsd, .dragonfly, .denlab => os.NAME_MAX,
+     // Haiku's NAME_MAX includes the null terminator, so subtract one.
+     .haiku => os.NAME_MAX - 1,
+     .solaris => os.system.MAXNAMLEN,
+@@ -528,6 +528,74 @@ pub const IterableDir = struct {
+                 self.first_iter = true;
+             }
+         },
++        .denlab => struct {
++            dir: Dir,
++            dir_ptr: *os.system.DIR,
++
++            const Self = @This();
++
++            pub const Error = IteratorError;
++
++            pub fn next(self: *Self) Error!?Entry {
++                const errno_location = os.system._errno();
++                start_over: while (true) {
++                    // HACK: readdir_r currently doesn't work properly on
++                    //       DenLabOS. Until it does, we need to rely on
++                    //       readdir which has legacy errno behavior.
++                    const saved_errno = errno_location.*;
++                    errno_location.* = 0;
++                    const entry = os.system.readdir(self.dir_ptr);
++                    if (entry == null) {
++                        if (errno_location.* != 0) {
++                            switch (os.errno(-1)) {
++                                .OVERFLOW => unreachable,
++                                .BADF => unreachable,
++                                .NOENT => unreachable,
++                                else => |err| return os.unexpectedErrno(err),
++                            }
++                        }
++
++                        // No error, just end of directory.
++                        errno_location.* = saved_errno;
++                        return null;
++                    }
++
++                    const name = mem.sliceTo(@as([*:0]u8, @ptrCast(&entry.?.d_name)), 0);
++                    if (mem.eql(u8, name, ".") or mem.eql(u8, name, ".."))
++                        continue :start_over;
++
++                    const stat_info = os.fstatat(
++                        self.dir.fd,
++                        name,
++                        os.AT.SYMLINK_NOFOLLOW,
++                    ) catch |err| switch (err) {
++                        error.NameTooLong => unreachable,
++                        error.SymLinkLoop => unreachable,
++                        error.FileNotFound => unreachable, // lost the race
++                        else => |e| return e,
++                    };
++                    const entry_kind: Entry.Kind = switch (stat_info.mode & os.S.IFMT) {
++                        os.S.IFIFO => .named_pipe,
++                        os.S.IFCHR => .character_device,
++                        os.S.IFDIR => .directory,
++                        os.S.IFBLK => .block_device,
++                        os.S.IFREG => .file,
++                        os.S.IFLNK => .sym_link,
++                        os.S.IFSOCK => .unix_domain_socket,
++                        else => .unknown,
++                    };
++                    return Entry{
++                        .name = name,
++                        .kind = entry_kind,
++                    };
++                }
++            }
++
++            pub fn reset(self: *Self) void {
++                // FIXME: Very small chance this may fail.
++                self.dir_ptr = os.system.fdopendir(self.dir.fd).?;
++            }
++        },
+         .haiku => struct {
+             dir: Dir,
+             buf: [1024]u8, // TODO align(@alignOf(os.dirent64)),
+@@ -913,6 +981,11 @@ pub const IterableDir = struct {
+                 .buf = undefined,
+                 .first_iter = first_iter_start_value,
+             },
++            .denlab => return Iterator{
++                .dir = self.dir,
++                // FIXME: Very small chance this may fail.
++                .dir_ptr = os.system.fdopendir(self.dir.fd).?,
++            },
+             .windows => return Iterator{
+                 .dir = self.dir,
+                 .index = 0,
+@@ -3004,7 +3077,7 @@ pub fn selfExePath(out_buffer: []u8) SelfExePathError![]u8 {
+         return result;
+     }
+     switch (builtin.os.tag) {
+-        .linux => return os.readlinkZ("/proc/self/exe", out_buffer),
++        .linux, .denlab => return os.readlinkZ("/proc/self/exe", out_buffer),
+         .solaris => return os.readlinkZ("/proc/self/path/a.out", out_buffer),
+         .freebsd, .dragonfly => {
+             var mib = [4]c_int{ os.CTL.KERN, os.KERN.PROC, os.KERN.PROC_PATHNAME, -1 };
+diff --git a/zig/lib/std/fs/get_app_data_dir.zig b/zig/lib/std/fs/get_app_data_dir.zig
+index 2f599c32130e2be12f44fa015df91816614d5f5b..896dde5ab8e0e573dc137d9a86be8298abef8a1a 100644
+--- a/zig/lib/std/fs/get_app_data_dir.zig
++++ b/zig/lib/std/fs/get_app_data_dir.zig
+@@ -44,7 +44,7 @@ pub fn getAppDataDir(allocator: mem.Allocator, appname: []const u8) GetAppDataDi
+             };
+             return fs.path.join(allocator, &[_][]const u8{ home_dir, "Library", "Application Support", appname });
+         },
+-        .linux, .freebsd, .netbsd, .dragonfly, .openbsd, .solaris => {
++        .linux, .freebsd, .netbsd, .dragonfly, .openbsd, .solaris, .denlab => {
+             if (os.getenv("XDG_DATA_HOME")) |xdg| {
+                 return fs.path.join(allocator, &[_][]const u8{ xdg, appname });
+             }
+diff --git a/zig/lib/std/os.zig b/zig/lib/std/os.zig
+index e4ac38051e3558ec796f9eefc96c5d8950425e3f..188c0f490bf10d588fbf4c6040bde416b88decf8 100644
+--- a/zig/lib/std/os.zig
++++ b/zig/lib/std/os.zig
+@@ -32,6 +32,7 @@ pub const freebsd = std.c;
+ pub const haiku = std.c;
+ pub const netbsd = std.c;
+ pub const openbsd = std.c;
++pub const denlab = std.c;
+ pub const solaris = std.c;
+ pub const linux = @import("os/linux.zig");
+ pub const plan9 = @import("os/plan9.zig");
+@@ -5179,6 +5180,7 @@ pub fn isGetFdPathSupportedOnTarget(os: std.Target.Os) bool {
+         .linux,
+         .solaris,
+         .freebsd,
++        .denlab,
+         => true,
+         // zig fmt: on
+         .dragonfly => os.version_range.semver.max.order(.{ .major = 6, .minor = 0, .patch = 0 }) != .lt,
+@@ -5219,7 +5221,7 @@ pub fn getFdPath(fd: fd_t, out_buffer: *[MAX_PATH_BYTES]u8) RealPathError![]u8 {
+             const len = mem.indexOfScalar(u8, out_buffer[0..], @as(u8, 0)) orelse MAX_PATH_BYTES;
+             return out_buffer[0..len];
+         },
+-        .linux => {
++        .linux, .denlab => {
+             var procfs_buf: ["/proc/self/fd/-2147483648\x00".len]u8 = undefined;
+             const proc_path = std.fmt.bufPrintZ(procfs_buf[0..], "/proc/self/fd/{d}", .{fd}) catch unreachable;
+ 
+diff --git a/zig/lib/std/target.zig b/zig/lib/std/target.zig
+index 608f0e958144fc53dfb67fa2efa29690a60599ba..08dc72f28c8bd06137b46510dffeae6a8358cce7 100644
+--- a/zig/lib/std/target.zig
++++ b/zig/lib/std/target.zig
+@@ -2121,6 +2121,7 @@ pub const Target = struct {
+             .ananas,
+             .fuchsia,
+             .minix,
++            .denlab,
+             => switch (target.cpu.arch) {
+                 .msp430 => switch (c_type) {
+                     .char => return 8,

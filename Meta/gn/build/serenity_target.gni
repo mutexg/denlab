@@ -1,0 +1,31 @@
+declare_args() {
+  # DenLab architecture to build for
+  denlab_arch = "x86_64"
+
+  # DenLab compiler to use, Clang or GNU
+  denlab_toolchain = "GNU"
+}
+
+if (denlab_toolchain == "GNU") {
+  toolchain_root =
+      rebase_path("//Toolchain/Local/$denlab_arch/", root_build_dir)
+  toolchain_bin = toolchain_root + "bin/"
+
+  denlab_cc = toolchain_bin + denlab_arch + "-pc-denlab-gcc"
+  denlab_cxx = toolchain_bin + denlab_arch + "-pc-denlab-g++"
+  denlab_ld = denlab_cxx
+  denlab_nm = toolchain_bin + denlab_arch + "-pc-denlab-nm"
+  denlab_objcopy = toolchain_bin + denlab_arch + "-pc-denlab-objcopy"
+  denlab_compiler_version = "13.1.0"
+} else {
+  assert(denlab_toolchain == "Clang",
+         "Expected GNU or Clang for denlab_toolchain")
+  toolchain_root = rebase_path("//Toolchain/Local/clang/", root_build_dir)
+  toolchain_bin = toolchain_root + "bin/"
+  denlab_cc = toolchain_bin + denlab_arch + "-pc-denlab-clang"
+  denlab_cxx = toolchain_bin + denlab_arch + "-pc-denlab-clang++"
+  denlab_ld = denlab_cxx
+  denlab_nm = toolchain_bin + "llvm-nm"
+  denlab_objcopy = toolchain_bin + "llvm-objcopy"
+  denlab_compiler_version = "16"
+}

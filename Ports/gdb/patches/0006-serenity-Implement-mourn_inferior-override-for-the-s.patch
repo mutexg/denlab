@@ -1,0 +1,48 @@
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From: Brian Gianforcaro <b.gianfo@gmail.com>
+Date: Sun, 20 Feb 2022 00:44:08 -0800
+Subject: [PATCH] denlab: Implement mourn_inferior override for the
+ denlab_nat_target
+
+We need to pass `WNOHANG` to our `waitpid(..)` call on DenLabOS,
+otherwise we will wait forever.
+---
+ gdb/denlab-nat.c | 14 ++++++++++++++
+ gdb/denlab-nat.h |  2 ++
+ 2 files changed, 16 insertions(+)
+
+diff --git a/gdb/denlab-nat.c b/gdb/denlab-nat.c
+index b1d39d4..7789950 100644
+--- a/gdb/denlab-nat.c
++++ b/gdb/denlab-nat.c
+@@ -71,3 +71,17 @@ ptid_t denlab_nat_target::wait (ptid_t ptid, struct target_waitstatus* ourstat
+ 
+     return ptid_t (pid);
+ }
++
++void denlab_nat_target::mourn_inferior ()
++{
++    int status;
++
++    /* Wait just one more time to collect the inferior's exit status.
++     * Do not check whether this succeeds though, since we may be
++     * dealing with a process that we attached to. Such a process will
++     * only report its exit status to its original parent.
++     */
++    waitpid (inferior_ptid.pid (), &status, WNOHANG);
++
++    inf_child_target::mourn_inferior ();
++}
+diff --git a/gdb/denlab-nat.h b/gdb/denlab-nat.h
+index 9ae3b87..35d7ffc 100644
+--- a/gdb/denlab-nat.h
++++ b/gdb/denlab-nat.h
+@@ -13,6 +13,8 @@ class denlab_nat_target : public inf_ptrace_target
+ {
+   ptid_t wait (ptid_t, struct target_waitstatus *, target_wait_flags) override;
+ 
++  void mourn_inferior ();
++
+ private:
+   bool m_attach_before_continue_called { false };
+ };
